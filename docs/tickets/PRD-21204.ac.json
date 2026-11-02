@@ -1,0 +1,102 @@
+[
+  {
+    "id": "TC1",
+    "ac": "AC1",
+    "text": "Given a tenant with print queues, when printix_list_printers is called, then the response lists the tenant's queues (id, name, status, site_id), paginated, with has_more set when more exist than the page size.",
+    "type": "auto",
+    "tests": ["tests/test_tools.py::test_list_printers_returns_paginated_queues"]
+  },
+  {
+    "id": "TC2",
+    "ac": "AC2",
+    "text": "Given a printer/queue id that exists in the tenant, when printix_get_printer is called with that id, then the response contains that printer's full properties and capabilities.",
+    "type": "auto",
+    "tests": ["tests/test_tools.py::test_get_printer_returns_full_properties"]
+  },
+  {
+    "id": "TC3",
+    "ac": "AC3",
+    "text": "Given a site, workstation, or printer id that does not exist in the tenant, when the matching get tool is called, then the response is a structured not_found error, not a crash or an unhandled 500.",
+    "type": "auto",
+    "tests": ["tests/test_tools.py::test_get_unknown_id_returns_not_found_for_each_resource"]
+  },
+  {
+    "id": "TC4",
+    "ac": "AC4",
+    "text": "Given a request with no X-Printix-Client-Id/X-Printix-Client-Secret headers, when any printix_* tool is called, then the HTTP response is 401 and the body lists the required header names.",
+    "type": "auto",
+    "tests": ["tests/test_middleware.py::test_missing_credential_headers_returns_401_with_required_list"]
+  },
+  {
+    "id": "TC5",
+    "ac": "AC5",
+    "text": "Given credential headers that Printix itself rejects (invalid client_id/secret), when any printix_* tool is called, then the tool returns a structured unauthorized error (distinct from TC4's transport-level 401), not a 500.",
+    "type": "auto",
+    "tests": ["tests/test_tools.py::test_printix_rejects_credentials_returns_structured_unauthorized"]
+  },
+  {
+    "id": "TC6",
+    "ac": "AC6",
+    "text": "Given a credential pair that can see exactly one Printix tenant and no X-Printix-Tenant-Id header, when any printix_* tool is called, then the tenant is auto-resolved and the call proceeds normally.",
+    "type": "auto",
+    "tests": ["tests/test_tools.py::test_single_accessible_tenant_is_auto_resolved"]
+  },
+  {
+    "id": "TC7",
+    "ac": "AC7",
+    "text": "Given a credential pair that can see more than one Printix tenant and no X-Printix-Tenant-Id header, when any printix_* tool is called, then the response is a structured invalid_argument error listing the tenant ids found, not a silent guess.",
+    "type": "auto",
+    "tests": ["tests/test_tools.py::test_multiple_accessible_tenants_without_header_returns_invalid_argument"]
+  },
+  {
+    "id": "TC8",
+    "ac": "AC8",
+    "text": "Given a tenant with zero printers (or sites, or workstations), when the matching list tool is called, then the response is an empty list, not an error.",
+    "type": "auto",
+    "tests": ["tests/test_tools.py::test_empty_tenant_returns_empty_list_not_error"]
+  },
+  {
+    "id": "TC9",
+    "ac": "AC9",
+    "text": "Given two simulated concurrent requests using two different tenants' credentials, when each calls printix_list_printers, then each response contains only its own tenant's data and the per-request context is reset afterward (no leakage via shared state).",
+    "type": "auto",
+    "tests": ["tests/test_middleware.py::test_concurrent_requests_from_different_tenants_do_not_leak"]
+  },
+  {
+    "id": "TC10",
+    "ac": "AC9",
+    "text": "Given two real Printix tenants' credentials, when each is used against a running instance back-to-back, then each response only ever contains that tenant's own printers — confirms TC9's unit-level proof against the real API.",
+    "type": "manual",
+    "steps": [
+      "Obtain client_id/client_secret for two distinct real Printix tenants",
+      "Call printix_list_printers with tenant A's headers against the running service",
+      "Call printix_list_printers with tenant B's headers against the same running service",
+      "Compare the two responses"
+    ],
+    "expect": "Tenant A's response lists only tenant A's printers; tenant B's response lists only tenant B's printers; no overlap or cross-tenant data.",
+    "result": "blocked",
+    "evidence": "needs a real vendor account — no Printix trial/test tenant is available to this pipeline; not a release blocker per vendor-mcp-development SOP (\"no test account also ships to INT\")."
+  },
+  {
+    "id": "TC11",
+    "ac": "AC10",
+    "text": "Given the service is running, when GET /health is called, then it returns 200 without requiring any Printix credential headers and without calling the Printix API.",
+    "type": "auto",
+    "tests": ["tests/test_tools.py::test_health_endpoint_does_not_require_printix_credentials"]
+  },
+  {
+    "id": "TC12",
+    "ac": "AC1",
+    "text": "Given one real Printix tenant, when initialize -> tools/list -> tools/call printix_list_printers is run against it, then the returned data shape matches what api.printix.net actually returns (confirms the mocked unit tests reflect reality).",
+    "type": "manual",
+    "steps": [
+      "Obtain client_id/client_secret for one real Printix tenant with at least one printer",
+      "Start the service locally with those credentials in the request headers",
+      "Call initialize, then tools/list, then tools/call printix_list_printers",
+      "Compare the response fields against the live Printix Cloud Print API response"
+    ],
+    "expect": "Tool catalogue includes all 6 printix_* tools; printix_list_printers returns real queue data whose fields match this design's §5 contract.",
+    "result": "blocked",
+    "evidence": "needs a real vendor account — see TC10; not a release blocker."
+  }
+]
