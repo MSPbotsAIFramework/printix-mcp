@@ -1,5 +1,7 @@
 # PRD-21204 · Code review
 
+Status: frozen @ 9867790
+
 ## Round 1 · 2026-11-02 · reviewed ee77d79 (base c799955)
 
 Verdict: changes requested
@@ -32,3 +34,30 @@ Verdict: changes requested
    - Added 2 new automated tests in `tests/test_tools.py` (`test_successful_tool_call_logs_completion_without_credentials`, `test_rejected_credentials_logs_unauthorized_without_leaking_secret`) asserting: the expected fields are present on both log events, the two events for one call share `request_id`, and the credential header value / mocked access token never appear anywhere in the captured log text. `logging_utils.py`'s logger keeps `propagate` at its default (`True`) specifically so `caplog` can see these records in tests; this is a no-op in production since nothing in this service's uvicorn/Starlette stack installs a root-logger handler.
    - Re-ran the full self-test suite on the merged-with-`main` tree (see updated Self-test section below): `uv run pytest -q` 22 passed (20 original + 2 new), Chinese-character scan on `src/` and `tests/` clean, manual secret-pattern grep clean, README Connector section unchanged (still byte-identical to the skill reference), `gitleaks` still not installed on this machine (same as round 1 — not a regression).
    - Not independently re-verified this round: `docker build` (no Docker socket permission in this sandbox). Not a regression risk: this round touches only `src/printix_mcp/{logging_utils.py (new),auth_middleware.py,printix_client.py,tools.py}` and `tests/test_tools.py` — no `Dockerfile`, `pyproject.toml`, or dependency change — so round 1's "docker build + HEALTHCHECK OK" result still applies; flagging for the reviewer to spot-check if desired.
+
+## Round 2 · 2026-11-02 · reviewed 9867790 (previous round reviewed ee77d79)
+
+Verdict: approved
+
+### Round 1 must-fix check
+
+1. [must-fix #1, round 1] Structured per-call logging — **resolved**. Verified independently, not just by re-reading the "Fixes" claim above:
+   - `src/printix_mcp/logging_utils.py` (new) emits one JSON line per event on stdout, tagged with a `request_id` bound once per HTTP request in `auth_middleware.py`'s `CredentialsMiddleware` (`bind_request_id`/`reset_request_id` in a `try/finally`, correctly paired with the existing credentials-contextvar reset).
+   - `printix_client.py`: every exit path of `_fetch_token` and every branch of `_request` (timeout, network error, non-2xx after retries exhausted, and the success path) calls `_log_printix_call` exactly once, logging `method`, `attempt`, `status_class` (`"2xx"`/`"4xx"`/`"n/a"`), `error_code`, `latency_ms` — never the full URL (which would carry tenant/resource ids), never a header value, never a body. Read every branch in the diff by hand; no branch returns or raises without logging.
+   - `tools.py`: all 6 tools now log exactly once per invocation via `_log_tool_call` at each of their return points (success, caught `PrintixError`, and the manually-built `not_found` envelope for the 3 `get_*` tools) — tool name, mapped error code, latency only.
+   - Independently ran `uv run pytest -q` on `9867790`: **22 passed**, 0 failed (20 original + the 2 new logging tests). Read both new tests (`test_successful_tool_call_logs_completion_without_credentials`, `test_rejected_credentials_logs_unauthorized_without_leaking_secret`) line by line: they assert the `tool_call`/`printix_http_call` pair shares one `request_id`, and assert the raw `X-Printix-Client-Secret` header value and the mocked access token string are both absent from the full captured log text — this is the actual secret-leak check, not just "a log line exists".
+   - Manual secret-pattern grep (`(token|secret|api[_-]?key|password|bearer)\s*[:=]\s*[A-Za-z0-9_-]{12,}`) across the whole repo at `9867790`: only matches variable/header-name identifiers (`client_secret`, `HEADER_CLIENT_SECRET`), no real values — consistent with `gitleaks` still being unavailable on this machine (confirmed, same as round 1, not a regression).
+   - This round's diff (`ee77d79...9867790`) touches only `auth_middleware.py`, `logging_utils.py` (new), `printix_client.py`, `tools.py`, and `tests/test_tools.py`. No `Dockerfile`, `pyproject.toml`, or `uv.lock` change (`git diff --stat ee77d79...9867790 -- Dockerfile pyproject.toml uv.lock` is empty) — round 1's "docker build + HEALTHCHECK OK" result still applies, as the dev leg's self-test noted; not independently re-verified this round for the same reason (no Docker socket in this sandbox).
+
+### New findings this round
+
+None. No must-fix, no new suggestion — the fix is scoped exactly to the must-fix, does not touch any tool's return value, error envelope, or the Data & API contract, and does not reintroduce either of round 1's two open (non-blocking) suggestions (`_clamp_limit` silent coercion; no overall per-call time budget) as regressions — both are unchanged from round 1 and remain suggestions, not must-fix.
+
+### Independently verified (round 2)
+
+- `uv sync && uv run pytest -q` on `9867790`: 22 passed, 0 failed.
+- `grep -rnP '[\x{4e00}-\x{9fff}]' --exclude-dir=.git --exclude-dir=.venv .`: the only hit is the verbatim SOP citation inside this review document's own Round 1 Findings text (pre-existing since `d05fc93`, not introduced this round, not part of the `ee77d79...9867790` code diff, and not part of the shipped service's code/docs) — not a round-2 regression, not actioned.
+- README's "MSPbots Connector" section re-diffed in full (not just the portion touched by this round, which is none) against `~/.claude/skills/vendor-mcp-development/reference/readme-connector-section.md`: still byte-identical; this round does not touch `README.md`.
+- `git diff --stat ee77d79...9867790 -- Dockerfile pyproject.toml uv.lock`: empty.
+
+Code review passed, 0 suggestions new this round. Proceeding to merge into `main`, INT vendor registration, and the connector wiki per `mcp-track.md` §4.4–4.5.
