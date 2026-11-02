@@ -2,65 +2,87 @@
   {
     "id": "TC1",
     "ac": "AC1",
-    "text": "Given a tenant with print queues, when printix_list_printers is called, then the response lists the tenant's queues (id, name, status, site_id), paginated, with has_more set when more exist than the page size.",
+    "text": "Given a tenant with print queues, when printix_list_printers is called, then the response lists the tenant's queues (id, name, status, site), paginated, with has_more set when more exist than the page size.",
     "type": "auto",
-    "tests": ["tests/test_tools.py::test_list_printers_returns_paginated_queues"]
+    "tests": ["tests/test_tools.py::test_list_printers_returns_paginated_queues"],
+    "result": "pass",
+    "evidence": "pytest -q: 20 passed, 0 failed (full run below). test_list_printers_returns_paginated_queues asserts id/name/status/location per item plus has_more=true and next_cursor='1' against a 2-page mocked response. CHANGED FROM DESIGN: the 'site' field is returned as 'location' (Printix's own free-text location string), not a site_id/foreign-key -- Printix's List Print Queues / Get printer properties responses (https://printix.github.io/) document no structured site reference per print queue, only 'location'. See Self-test 'Changed fields vs. the posted tech design' for the full citation; this does not change what AC1 asks for (surface where a queue sits), only which real field answers it."
   },
   {
     "id": "TC2",
     "ac": "AC2",
     "text": "Given a printer/queue id that exists in the tenant, when printix_get_printer is called with that id, then the response contains that printer's full properties and capabilities.",
     "type": "auto",
-    "tests": ["tests/test_tools.py::test_get_printer_returns_full_properties"]
+    "tests": ["tests/test_tools.py::test_get_printer_returns_full_properties"],
+    "result": "pass",
+    "evidence": "pytest -q: 20 passed. test_get_printer_returns_full_properties confirms the capabilities object (and id/status/location/model/vendor/serial_no/printer_sign_id) pass through unchanged from a mocked print-queue list entry. IMPLEMENTATION NOTE: Printix's dedicated single-item endpoint is a two-segment path (.../printers/{printerId}/queues/{queueId}) only discoverable via a HATEOAS self-link returned by the list call, not constructible from the queue id alone (https://printix.github.io/, 'Get printer properties' / 'List Print Queues'); this tool instead scans the (per the tech design, typically small) print-queue list and returns the matching entry, which the vendor docs confirm already carries the same capabilities object as the dedicated endpoint."
   },
   {
     "id": "TC3",
     "ac": "AC3",
     "text": "Given a site, workstation, or printer id that does not exist in the tenant, when the matching get tool is called, then the response is a structured not_found error, not a crash or an unhandled 500.",
     "type": "auto",
-    "tests": ["tests/test_tools.py::test_get_unknown_id_returns_not_found_for_each_resource"]
+    "tests": ["tests/test_tools.py::test_get_unknown_id_returns_not_found_for_each_resource"],
+    "result": "pass",
+    "evidence": "pytest -q: 20 passed. test_get_unknown_id_returns_not_found_for_each_resource exercises all three get tools (printer via empty-list scan, site and workstation via mocked 404) and asserts each returns {\"error\":{\"code\":\"not_found\",...,\"retryable\":false}}."
   },
   {
     "id": "TC4",
     "ac": "AC4",
     "text": "Given a request with no X-Printix-Client-Id/X-Printix-Client-Secret headers, when any printix_* tool is called, then the HTTP response is 401 and the body lists the required header names.",
     "type": "auto",
-    "tests": ["tests/test_middleware.py::test_missing_credential_headers_returns_401_with_required_list"]
+    "tests": [
+      "tests/test_middleware.py::test_missing_credential_headers_returns_401_with_required_list",
+      "tests/test_middleware.py::test_missing_only_secret_still_returns_401_and_lists_just_that_header",
+      "tests/test_tools.py::test_missing_credential_headers_returns_401_with_required_list"
+    ],
+    "result": "pass",
+    "evidence": "pytest -q: 20 passed. Also reproduced live: the running service (uv run python -m printix_mcp) answered a tools/list POST with no credential headers with HTTP 401 and body {\"error\":\"missing_required_headers\",\"required\":[\"X-Printix-Client-Id\",\"X-Printix-Client-Secret\"]} (manual curl, see Self-test section)."
   },
   {
     "id": "TC5",
     "ac": "AC5",
     "text": "Given credential headers that Printix itself rejects (invalid client_id/secret), when any printix_* tool is called, then the tool returns a structured unauthorized error (distinct from TC4's transport-level 401), not a 500.",
     "type": "auto",
-    "tests": ["tests/test_tools.py::test_printix_rejects_credentials_returns_structured_unauthorized"]
+    "tests": ["tests/test_tools.py::test_printix_rejects_credentials_returns_structured_unauthorized"],
+    "result": "pass",
+    "evidence": "pytest -q: 20 passed (mocked 401 from the token endpoint). ALSO confirmed live against the real vendor: running service called with placeholder credentials actually reached https://auth.printix.net/oauth/token, got a real HTTP 401 back, and returned {\"error\":{\"code\":\"unauthorized\",\"message\":\"Printix rejected the provided client_id/client_secret pair.\",\"retryable\":false}} as the tool result -- see Self-test section for the full request/response."
   },
   {
     "id": "TC6",
     "ac": "AC6",
     "text": "Given a credential pair that can see exactly one Printix tenant and no X-Printix-Tenant-Id header, when any printix_* tool is called, then the tenant is auto-resolved and the call proceeds normally.",
     "type": "auto",
-    "tests": ["tests/test_tools.py::test_single_accessible_tenant_is_auto_resolved"]
+    "tests": ["tests/test_tools.py::test_single_accessible_tenant_is_auto_resolved"],
+    "result": "pass",
+    "evidence": "pytest -q: 20 passed. Mocks the root HATEOAS response (https://printix.github.io/ 'Root request') with one tenant link, confirms the tenant id is parsed out of its href and used for the subsequent printers call without a tenant header."
   },
   {
     "id": "TC7",
     "ac": "AC7",
     "text": "Given a credential pair that can see more than one Printix tenant and no X-Printix-Tenant-Id header, when any printix_* tool is called, then the response is a structured invalid_argument error listing the tenant ids found, not a silent guess.",
     "type": "auto",
-    "tests": ["tests/test_tools.py::test_multiple_accessible_tenants_without_header_returns_invalid_argument"]
+    "tests": ["tests/test_tools.py::test_multiple_accessible_tenants_without_header_returns_invalid_argument"],
+    "result": "pass",
+    "evidence": "pytest -q: 20 passed. Mocks a root response with two tenant links; asserts error.code == invalid_argument and both tenant ids appear in the message."
   },
   {
     "id": "TC8",
     "ac": "AC8",
     "text": "Given a tenant with zero printers (or sites, or workstations), when the matching list tool is called, then the response is an empty list, not an error.",
     "type": "auto",
-    "tests": ["tests/test_tools.py::test_empty_tenant_returns_empty_list_not_error"]
+    "tests": ["tests/test_tools.py::test_empty_tenant_returns_empty_list_not_error"],
+    "result": "pass",
+    "evidence": "pytest -q: 20 passed. test_empty_tenant_returns_empty_list_not_error asserts printix_list_sites returns {\"sites\":[],\"has_more\":false,\"next_cursor\":null} for a zero-element page, not an error envelope."
   },
   {
     "id": "TC9",
     "ac": "AC9",
     "text": "Given two simulated concurrent requests using two different tenants' credentials, when each calls printix_list_printers, then each response contains only its own tenant's data and the per-request context is reset afterward (no leakage via shared state).",
     "type": "auto",
-    "tests": ["tests/test_middleware.py::test_concurrent_requests_from_different_tenants_do_not_leak"]
+    "tests": ["tests/test_middleware.py::test_concurrent_requests_from_different_tenants_do_not_leak"],
+    "result": "pass",
+    "evidence": "pytest -q: 20 passed. Two concurrent ASGI requests with distinct X-Printix-Client-Id headers, each handler sleeps mid-request to force interleaving; both responses are confirmed non-mixed via two different id checks, and get_credentials() raises LookupError again after both requests complete (ContextVar reset verified, not merely assumed)."
   },
   {
     "id": "TC10",
@@ -75,14 +97,16 @@
     ],
     "expect": "Tenant A's response lists only tenant A's printers; tenant B's response lists only tenant B's printers; no overlap or cross-tenant data.",
     "result": "blocked",
-    "evidence": "needs a real vendor account — no Printix trial/test tenant is available to this pipeline; not a release blocker per vendor-mcp-development SOP (\"no test account also ships to INT\")."
+    "evidence": "needs a real vendor account — no Printix trial/test tenant is available to this pipeline; not a release blocker per vendor-mcp-development SOP (no test account, still ship to INT)."
   },
   {
     "id": "TC11",
     "ac": "AC10",
     "text": "Given the service is running, when GET /health is called, then it returns 200 without requiring any Printix credential headers and without calling the Printix API.",
     "type": "auto",
-    "tests": ["tests/test_tools.py::test_health_endpoint_does_not_require_printix_credentials"]
+    "tests": ["tests/test_tools.py::test_health_endpoint_does_not_require_printix_credentials"],
+    "result": "pass",
+    "evidence": "pytest -q: 20 passed. Also reproduced live (uv run python -m printix_mcp) and inside the built Docker image (docker run, curl http://localhost:8080/health -> 200 {\"status\":\"ok\"}); Docker HEALTHCHECK itself reported status 'healthy' after the 10s start period. Neither path touches Printix."
   },
   {
     "id": "TC12",
@@ -97,6 +121,6 @@
     ],
     "expect": "Tool catalogue includes all 6 printix_* tools; printix_list_printers returns real queue data whose fields match this design's §5 contract.",
     "result": "blocked",
-    "evidence": "needs a real vendor account — see TC10; not a release blocker."
+    "evidence": "needs a real vendor account — see TC10; not a release blocker. Partially substituted: tools/list was run live against the running service and the real deployed Docker image (6 tools, correct names/schemas, see Self-test); only the real tools/call round-trip with actual tenant data remains unverified."
   }
 ]

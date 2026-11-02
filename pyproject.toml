@@ -1,0 +1,34 @@
+[project]
+name = "printix-mcp"
+version = "0.1.0"
+description = "MCP server exposing read-only Printix printer, site, and workstation lookups to MSPbots Agent Platform"
+authors = [
+    { name = "Dev01.MBAgent", email = "dev01.mbagent@mspbots.ai" }
+]
+license = "Apache-2.0"
+requires-python = ">=3.12"
+dependencies = [
+    "mcp[cli]>=1.9.0,<2.0.0",
+    "httpx>=0.27,<1.0",
+    "pydantic>=2.0,<3.0",
+    "pydantic-settings>=2.0,<3.0",
+    "uvicorn>=0.30,<1.0",
+]
+
+[project.scripts]
+printix-mcp = "printix_mcp.__main__:main"
+
+[build-system]
+requires = ["uv_build>=0.13.6,<0.14.0"]
+build-backend = "uv_build"
+
+[dependency-groups]
+dev = [
+    "pytest>=8.0,<10.0",
+    "pytest-asyncio>=0.24,<2.0",
+    "respx>=0.21,<1.0",
+]
+
+[tool.pytest.ini_options]
+asyncio_mode = "auto"
+asyncio_default_fixture_loop_scope = "function"
