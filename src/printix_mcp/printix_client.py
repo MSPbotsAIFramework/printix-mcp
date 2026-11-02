@@ -14,10 +14,12 @@ from __future__ import annotations
 
 import asyncio
 import re
+import time
 from typing import Any, Literal
 
 import httpx
 
+from .logging_utils import elapsed_ms, log_event
 from .settings import settings
 
 ErrorCode = Literal[
@@ -84,6 +86,7 @@ class PrintixClient:
             self._tenant_id = await self._resolve_tenant()
 
     async def _fetch_token(self) -> str:
+        start = time.monotonic()
         try:
             response = await self._http.post(
                 settings.printix_token_url,
@@ -95,34 +98,51 @@ class PrintixClient:
                 headers={"Content-Type": "application/x-www-form-urlencoded"},
             )
         except httpx.TimeoutException as exc:
-            raise PrintixError(
+            error = PrintixError(
                 "upstream_error", f"Timed out contacting Printix's token endpoint: {exc}", retryable=True
-            ) from exc
+            )
+            _log_printix_call("POST token", start, attempt=0, error_code=error.code)
+            raise error from exc
         except httpx.HTTPError as exc:
-            raise PrintixError(
+            error = PrintixError(
                 "upstream_error", f"Network error contacting Printix's token endpoint: {exc}", retryable=True
-            ) from exc
+            )
+            _log_printix_call("POST token", start, attempt=0, error_code=error.code)
+            raise error from exc
 
         if response.status_code >= 500:
-            raise PrintixError(
+            error = PrintixError(
                 "upstream_error", f"Printix's token endpoint returned HTTP {response.status_code}.", retryable=True
             )
-        if response.status_code == 429:
-            raise PrintixError(
+        elif response.status_code == 429:
+            error = PrintixError(
                 "rate_limited", "Printix's token endpoint is rate-limiting this credential pair.", retryable=True
             )
-        if response.status_code != 200:
+        elif response.status_code != 200:
             # OAuth2 client-credentials rejections (bad client_id/secret) come back
             # as 400 or 401 depending on the failure; either way this is "Printix
             # rejected the credentials", not a transport problem (AC5/TC5).
-            raise PrintixError(
+            error = PrintixError(
                 "unauthorized", "Printix rejected the provided client_id/client_secret pair.", retryable=False
             )
+        else:
+            error = None
+
+        if error is not None:
+            _log_printix_call("POST token", start, attempt=0, status_code=response.status_code, error_code=error.code)
+            raise error
 
         body = response.json()
         token = body.get("access_token")
         if not token:
-            raise PrintixError("upstream_error", "Printix's token response had no access_token field.", retryable=True)
+            no_token_error = PrintixError(
+                "upstream_error", "Printix's token response had no access_token field.", retryable=True
+            )
+            _log_printix_call(
+                "POST token", start, attempt=0, status_code=response.status_code, error_code=no_token_error.code
+            )
+            raise no_token_error
+        _log_printix_call("POST token", start, attempt=0, status_code=response.status_code)
         return token
 
     async def _resolve_tenant(self) -> str:
@@ -155,6 +175,7 @@ class PrintixClient:
         await self._ensure_token()
         last_error: PrintixError | None = None
         for attempt in range(_MAX_RETRIES + 1):
+            start = time.monotonic()
             try:
                 response = await self._http.request(
                     method,
@@ -164,19 +185,23 @@ class PrintixClient:
                 )
             except httpx.TimeoutException as exc:
                 last_error = PrintixError("upstream_error", f"Timed out calling Printix: {exc}", retryable=True)
+                _log_printix_call(method, start, attempt=attempt, error_code=last_error.code)
                 await asyncio.sleep(min(2**attempt, 5))
                 continue
             except httpx.HTTPError as exc:
                 last_error = PrintixError("upstream_error", f"Network error calling Printix: {exc}", retryable=True)
+                _log_printix_call(method, start, attempt=attempt, error_code=last_error.code)
                 await asyncio.sleep(min(2**attempt, 5))
                 continue
 
             if response.status_code < 300:
+                _log_printix_call(method, start, attempt=attempt, status_code=response.status_code)
                 return response.json() if response.content else {}
 
             code, retryable = _status_to_code(response.status_code)
             message = _error_message_from_body(response) or f"Printix returned HTTP {response.status_code}."
             last_error = PrintixError(code, message, retryable=retryable)
+            _log_printix_call(method, start, attempt=attempt, status_code=response.status_code, error_code=code)
             if retryable and attempt < _MAX_RETRIES:
                 await asyncio.sleep(_retry_after_seconds(response) or min(2**attempt, 5))
                 continue
@@ -292,6 +317,25 @@ def _id_from_self_link(item: dict[str, Any]) -> str | None:
     if not href:
         return None
     return href.rstrip("/").rsplit("/", 1)[-1] or None
+
+
+def _log_printix_call(
+    method: str, start: float, *, attempt: int, status_code: int | None = None, error_code: ErrorCode | None = None
+) -> None:
+    """Log one outbound Printix HTTP call: status class and mapped error code only.
+
+    Never the request/response body, query params, or any header value
+    (SOP S6/S11) -- that is also why only ``method`` (not the full URL, which
+    can carry tenant/resource ids) is logged here.
+    """
+    log_event(
+        "printix_http_call",
+        method=method,
+        attempt=attempt,
+        status_class=(f"{status_code // 100}xx" if status_code is not None else "n/a"),
+        error_code=error_code,
+        latency_ms=elapsed_ms(start),
+    )
 
 
 def _status_to_code(status_code: int) -> tuple[ErrorCode, bool]:

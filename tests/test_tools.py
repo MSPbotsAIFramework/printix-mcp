@@ -350,3 +350,52 @@ async def test_error_status_codes_map_to_expected_envelope(
     # retryable codes get retried up to _MAX_RETRIES extra times before giving up
     if expected_retryable:
         assert route.call_count >= 2
+
+
+# -- PRD-21204 review round 1 must-fix: structured per-call logging, no secrets ------------
+
+
+@respx.mock
+async def test_successful_tool_call_logs_completion_without_credentials(caplog: pytest.LogCaptureFixture) -> None:
+    _mock_token()
+    respx.get(f"{API_BASE}/tenants/{TENANT_ID}/printers").mock(
+        return_value=httpx.Response(
+            200,
+            json={"success": True, "page": {"number": 0, "size": 50, "totalElements": 0, "totalPages": 1}, "printers": []},
+        )
+    )
+    with caplog.at_level("INFO", logger="printix_mcp"):
+        await _call_tool(_BASE_HEADERS, "printix_list_printers")
+
+    tool_events = [json.loads(r.message) for r in caplog.records if r.name == "printix_mcp"]
+    tool_call = next(e for e in tool_events if e["event"] == "tool_call")
+    assert tool_call["tool"] == "printix_list_printers"
+    assert tool_call["error_code"] is None
+    assert isinstance(tool_call["latency_ms"], int)
+    assert tool_call["request_id"]  # non-empty: set once per request by CredentialsMiddleware
+
+    http_call = next(e for e in tool_events if e["event"] == "printix_http_call")
+    assert http_call["status_class"] == "2xx"
+    assert http_call["request_id"] == tool_call["request_id"]  # same request, correlatable
+
+    # Never the credential values, never the bearer token, never a response body field.
+    full_text = "\n".join(r.message for r in caplog.records if r.name == "printix_mcp")
+    assert _BASE_HEADERS[HEADER_CLIENT_SECRET] not in full_text
+    assert "test-token" not in full_text  # the mocked access_token from _mock_token()
+
+
+@respx.mock
+async def test_rejected_credentials_logs_unauthorized_without_leaking_secret(caplog: pytest.LogCaptureFixture) -> None:
+    respx.post(TOKEN_URL).mock(return_value=httpx.Response(401, json={"error": "invalid_client"}))
+    with caplog.at_level("INFO", logger="printix_mcp"):
+        await _call_tool(_BASE_HEADERS, "printix_list_printers")
+
+    events = [json.loads(r.message) for r in caplog.records if r.name == "printix_mcp"]
+    tool_call = next(e for e in events if e["event"] == "tool_call")
+    assert tool_call["error_code"] == "unauthorized"
+    token_call = next(e for e in events if e["event"] == "printix_http_call")
+    assert token_call["status_class"] == "4xx"
+    assert token_call["error_code"] == "unauthorized"
+
+    full_text = "\n".join(r.message for r in caplog.records if r.name == "printix_mcp")
+    assert _BASE_HEADERS[HEADER_CLIENT_SECRET] not in full_text

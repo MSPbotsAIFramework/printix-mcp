@@ -17,6 +17,8 @@ from starlette.requests import Request
 from starlette.responses import Response
 from starlette.types import ASGIApp, Receive, Scope, Send
 
+from .logging_utils import bind_request_id, new_request_id, reset_request_id
+
 HEADER_CLIENT_ID = "X-Printix-Client-Id"
 HEADER_CLIENT_SECRET = "X-Printix-Client-Secret"
 HEADER_TENANT_ID = "X-Printix-Tenant-Id"
@@ -85,9 +87,14 @@ class CredentialsMiddleware:
         token = _credentials_var.set(
             PrintixCredentials(client_id=client_id, client_secret=client_secret, tenant_id=tenant_id)
         )
+        # Bound once per request so tools.py and printix_client.py's log lines for the
+        # same call can be correlated (see logging_utils.py); never derived from or
+        # containing any credential value.
+        request_id_token = bind_request_id(new_request_id())
         try:
             await self.app(scope, receive, send)
         finally:
+            reset_request_id(request_id_token)
             _credentials_var.reset(token)
 
 

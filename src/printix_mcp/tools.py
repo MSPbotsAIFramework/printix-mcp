@@ -9,12 +9,14 @@ calls (SOP S3.4).
 from __future__ import annotations
 
 import json
+import time
 from typing import Any
 
 from mcp.server.fastmcp import FastMCP
 from mcp.types import ToolAnnotations
 
 from .auth_middleware import get_credentials
+from .logging_utils import elapsed_ms, log_event
 from .printix_client import PrintixClient, PrintixError
 
 _MAX_LIMIT = 200
@@ -65,6 +67,16 @@ async def _new_client() -> PrintixClient:
     return PrintixClient(creds.client_id, creds.client_secret, creds.tenant_id)
 
 
+def _log_tool_call(tool_name: str, start: float, *, error_code: str | None = None) -> None:
+    """Log one completed tool call: tool name, outcome, latency -- never args or results.
+
+    Called once per tool invocation, at every return point (success, mapped
+    Printix error, or a manually-built not-found envelope), per the tech
+    design's Observability note and vendor-mcp-development-sop.md §6/§14.
+    """
+    log_event("tool_call", tool=tool_name, error_code=error_code, latency_ms=elapsed_ms(start))
+
+
 def register(mcp: FastMCP) -> None:
     """Register all Printix tools on the given FastMCP app."""
 
@@ -77,12 +89,14 @@ def register(mcp: FastMCP) -> None:
         structured_output=False,
     )
     async def printix_list_printers(limit: int = _DEFAULT_LIMIT, cursor: str | None = None) -> str:
+        start = time.monotonic()
         page = _page_from_cursor(cursor)
         page_size = _clamp_limit(limit)
         try:
             async with await _new_client() as client:
                 body = await client.list_printers(page=page, page_size=page_size)
         except PrintixError as exc:
+            _log_tool_call("printix_list_printers", start, error_code=exc.code)
             return _error_envelope(exc)
 
         printers = [
@@ -94,6 +108,7 @@ def register(mcp: FastMCP) -> None:
             }
             for p in body.get("printers", [])
         ]
+        _log_tool_call("printix_list_printers", start)
         return _dumps(_paginated_result("printers", printers, body.get("page") or {}, page))
 
     @mcp.tool(
@@ -103,16 +118,20 @@ def register(mcp: FastMCP) -> None:
         structured_output=False,
     )
     async def printix_get_printer(printer_id: str) -> str:
+        start = time.monotonic()
         try:
             async with await _new_client() as client:
                 printer = await client.get_printer(printer_id)
         except PrintixError as exc:
+            _log_tool_call("printix_get_printer", start, error_code=exc.code)
             return _error_envelope(exc)
 
         if printer is None:
+            _log_tool_call("printix_get_printer", start, error_code="not_found")
             return _dumps(
                 {"error": {"code": "not_found", "message": f"No print queue '{printer_id}' was found in this tenant.", "retryable": False}}
             )
+        _log_tool_call("printix_get_printer", start)
         return _dumps(
             {
                 "id": printer.get("id"),
@@ -136,15 +155,18 @@ def register(mcp: FastMCP) -> None:
         structured_output=False,
     )
     async def printix_list_sites(limit: int = _DEFAULT_LIMIT, cursor: str | None = None) -> str:
+        start = time.monotonic()
         page = _page_from_cursor(cursor)
         page_size = _clamp_limit(limit)
         try:
             async with await _new_client() as client:
                 body = await client.list_sites(page=page, page_size=page_size)
         except PrintixError as exc:
+            _log_tool_call("printix_list_sites", start, error_code=exc.code)
             return _error_envelope(exc)
 
         sites = [{"id": s.get("id"), "name": s.get("name"), "path": s.get("path")} for s in body.get("sites", [])]
+        _log_tool_call("printix_list_sites", start)
         return _dumps(_paginated_result("sites", sites, body.get("page") or {}, page))
 
     @mcp.tool(
@@ -154,16 +176,20 @@ def register(mcp: FastMCP) -> None:
         structured_output=False,
     )
     async def printix_get_site(site_id: str) -> str:
+        start = time.monotonic()
         try:
             async with await _new_client() as client:
                 site = await client.get_site(site_id)
         except PrintixError as exc:
+            _log_tool_call("printix_get_site", start, error_code=exc.code)
             return _error_envelope(exc)
 
         if site is None:
+            _log_tool_call("printix_get_site", start, error_code="not_found")
             return _dumps(
                 {"error": {"code": "not_found", "message": f"No site '{site_id}' was found in this tenant.", "retryable": False}}
             )
+        _log_tool_call("printix_get_site", start)
         return _dumps(
             {
                 "id": site.get("id"),
@@ -184,12 +210,14 @@ def register(mcp: FastMCP) -> None:
         structured_output=False,
     )
     async def printix_list_workstations(limit: int = _DEFAULT_LIMIT, cursor: str | None = None) -> str:
+        start = time.monotonic()
         page = _page_from_cursor(cursor)
         page_size = _clamp_limit(limit)
         try:
             async with await _new_client() as client:
                 body = await client.list_workstations(page=page, page_size=page_size)
         except PrintixError as exc:
+            _log_tool_call("printix_list_workstations", start, error_code=exc.code)
             return _error_envelope(exc)
 
         workstations = [
@@ -201,6 +229,7 @@ def register(mcp: FastMCP) -> None:
             }
             for w in body.get("workstations", [])
         ]
+        _log_tool_call("printix_list_workstations", start)
         return _dumps(_paginated_result("workstations", workstations, body.get("page") or {}, page))
 
     @mcp.tool(
@@ -210,13 +239,16 @@ def register(mcp: FastMCP) -> None:
         structured_output=False,
     )
     async def printix_get_workstation(workstation_id: str) -> str:
+        start = time.monotonic()
         try:
             async with await _new_client() as client:
                 workstation = await client.get_workstation(workstation_id)
         except PrintixError as exc:
+            _log_tool_call("printix_get_workstation", start, error_code=exc.code)
             return _error_envelope(exc)
 
         if workstation is None:
+            _log_tool_call("printix_get_workstation", start, error_code="not_found")
             return _dumps(
                 {
                     "error": {
@@ -226,6 +258,7 @@ def register(mcp: FastMCP) -> None:
                     }
                 }
             )
+        _log_tool_call("printix_get_workstation", start)
         return _dumps(
             {
                 "id": workstation.get("id"),
